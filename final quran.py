@@ -22,11 +22,6 @@ CHAPTERS_STRUCTURE = {
     '107': 7, '108': 3, '109': 6, '110': 3, '111': 5, '112': 4, '113': 5, '114': 6
 }
 
-# Precompute cumulative verse counts
-CUMULATIVE = [0]
-for ch in range(1, len(CHAPTERS_STRUCTURE) + 1):
-    CUMULATIVE.append(CUMULATIVE[-1] + CHAPTERS_STRUCTURE[str(ch)])
-
 # Translation IDs for different languages
 TRANSLATION_IDS = {
     'en': '131',  # English
@@ -57,18 +52,22 @@ def calculate_verse_ranges(verse_start, verse_count):
     Calculate which chapters and verses to fetch.
     Returns a list of tuples: (chapter, start_verse, end_verse)
     """
-    chapter, start_verse = map(int, verse_start.split(":"))
-
-    abs_start = CUMULATIVE[chapter - 1] + start_verse
-    abs_end = abs_start + verse_count - 1
-
-    end_chapter = next(i for i, cum in enumerate(CUMULATIVE) if cum >= abs_end)
+    chapter = int(verse_start.split(":")[0])
+    start_verse = int(verse_start.split(":")[1])
 
     ranges = []
-    for ch in range(chapter, end_chapter + 1):
-        ch_start = 1 if ch != chapter else start_verse
-        ch_end = CHAPTERS_STRUCTURE[str(ch)] if ch != end_chapter else abs_end - CUMULATIVE[ch - 1]
-        ranges.append((ch, ch_start, ch_end))
+    remaining = verse_count
+
+    while remaining > 0:
+        total_in_chapter = CHAPTERS_STRUCTURE[str(chapter)]
+        available = total_in_chapter - start_verse + 1
+        take = min(remaining, available)
+
+        ranges.append((chapter, start_verse, start_verse + take - 1))
+
+        remaining -= take
+        chapter += 1
+        start_verse = 1
 
     return ranges
 

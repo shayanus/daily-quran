@@ -2,8 +2,6 @@ import requests
 import math
 from pyperclip import copy
 
-CONFIG_PATH = "config.json"
-
 # Chapter structure: chapter number -> total verses
 CHAPTERS_STRUCTURE = {
     '1': 7, '2': 286, '3': 200, '4': 176, '5': 120, '6': 165, '7': 206, '8': 75,
@@ -24,17 +22,40 @@ CHAPTERS_STRUCTURE = {
     '107': 7, '108': 3, '109': 6, '110': 3, '111': 5, '112': 4, '113': 5, '114': 6
 }
 
-# Translation IDs for different languages
+# Translation IDs
 TRANSLATION_IDS = {
-    'en': '131',  # English
-    'ur': '234',  # Urdu
+    'en': '131',  # English - Saheeh International
+    'ur': '234',  # Urdu - Fateh Muhammad Jalandhry
 }
 
-# Word-by-word translation language codes
-WORD_LANGUAGES = {
-    'en': 'en',
-    'ur': 'ur',
+HEADERS = {
+    'accept': '*/*',
+    'referer': 'https://quran.com/',
 }
+
+
+def calculate_end_verse(verse_start, verse_count):
+    """Calculate the ending verse key given a start and count."""
+    chapter = int(verse_start.split(":")[0])
+    start_verse = int(verse_start.split(":")[1])
+
+    remaining = verse_count
+    current_chapter = chapter
+    current_verse = start_verse
+
+    while remaining > 1:
+        total_in_chapter = CHAPTERS_STRUCTURE[str(current_chapter)]
+        available = total_in_chapter - current_verse + 1
+
+        if remaining <= available:
+            current_verse = current_verse + remaining - 1
+            break
+        else:
+            remaining -= available
+            current_chapter += 1
+            current_verse = 1
+
+    return f"{current_chapter}:{current_verse}"
 
 
 def find_smallest_per_page(start_item, end_item):
@@ -51,7 +72,7 @@ def find_smallest_per_page(start_item, end_item):
 
 def calculate_verse_ranges(verse_start, verse_count):
     """
-    Calculate which chapters and verses to fetch.
+    Calculate which chapters and verses to fetch for word-by-word.
     Returns a list of tuples: (chapter, start_verse, end_verse)
     """
     chapter = int(verse_start.split(":")[0])
@@ -74,47 +95,81 @@ def calculate_verse_ranges(verse_start, verse_count):
     return ranges
 
 
-def fetch_verses(verse_start, verse_count, languages=['en', 'ur']):
+def fetch_translations_advanced(verse_start, verse_end, languages=['en', 'ur']):
     """
-    Fetch Quran verses with translations in multiple languages.
-
-    Args:
-        verse_start: Starting verse (e.g., "2:29")
-        verse_count: Number of verses to fetch
-        languages: List of translation languages (e.g., ['en', 'ur'])
-
-    Returns:
-        List of verse dictionaries with verse_key, arabic_text, and translations dict
+    Fetch translations using the advanced_copy endpoint.
+    Returns a dict mapping verse_key -> {lang: translation_text}
     """
-    # Build comma-separated translation IDs
-    translation_ids = ','.join([TRANSLATION_IDS.get(lang, '131') for lang in languages])
+    url = "https://quran.com/api/proxy/content/api/qdc/verses/advanced_copy"
+    translations_map = {}
 
+    for lang in languages:
+        trans_id = TRANSLATION_IDS.get(lang, '131')
+        params = {
+            "raw": "true",
+            "from": verse_start,
+            "to": verse_end,
+            "footnote": "false",
+            "translator_name": "false",
+            "translations": trans_id
+        }
+
+        try:
+            response = requests.get(url, params=params, headers=HEADERS)
+            response.raise_for_status()
+            data = response.json()
+
+            # Parse the result - it comes as a single text with verses
+            result_text = data.get('result', '')
+
+            # Split by verse markers - format is typically "(chapter:verse) text"
+            # or just numbered verses
+            lines = result_text.strip().split('\n')
+
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+
+                # Try to parse verse reference - look for patterns like (2:29) or 2:29
+                import re
+                match = re.match(r'\((\d+:\d+)\)\s*(.*)', line)
+                if match:
+                    verse_key = match.group(1)
+                    text = match.group(2).strip()
+                else:
+                    # Try without parentheses
+                    match = re.match(r'(\d+:\d+)\s*(.*)', line)
+                    if match:
+                        verse_key = match.group(1)
+                        text = match.group(2).strip()
+                    else:
+                        continue
+
+                if verse_key not in translations_map:
+                    translations_map[verse_key] = {}
+                translations_map[verse_key][lang] = text
+
+        except requests.RequestException as e:
+            print(f"Error fetching {lang} translations: {e}")
+
+    return translations_map
+
+
+def fetch_word_by_word(verse_start, verse_count, word_lang='en'):
+    """
+    Fetch word-by-word translations for a specific language.
+    Returns a dict mapping verse_key -> list of word dicts
+    """
     ranges = calculate_verse_ranges(verse_start, verse_count)
-    all_verses = []
-
-    headers = {
-        'accept': '*/*',
-        'referer': 'https://quran.com/',
-    }
+    words_map = {}
 
     for chapter, start_verse, end_verse in ranges:
         per_page, page_number = find_smallest_per_page(start_verse, end_verse)
 
-        # First fetch with English word translations
-        params_en = {
+        params = {
             'words': 'true',
-            'translations': translation_ids,
-            'word_translation_language': 'en',
-            'word_fields': 'verse_key,position,text_uthmani,char_type_name',
-            'page': str(page_number),
-            'per_page': str(per_page),
-        }
-
-        # Second fetch with Urdu word translations
-        params_ur = {
-            'words': 'true',
-            'translations': translation_ids,
-            'word_translation_language': 'ur',
+            'word_translation_language': word_lang,
             'word_fields': 'verse_key,position,text_uthmani,char_type_name',
             'page': str(page_number),
             'per_page': str(per_page),
@@ -123,71 +178,90 @@ def fetch_verses(verse_start, verse_count, languages=['en', 'ur']):
         url = f'https://quran.com/api/proxy/content/api/qdc/verses/by_chapter/{chapter}'
 
         try:
-            # Fetch English word-by-word
-            response_en = requests.get(url, headers=headers, params=params_en)
-            response_en.raise_for_status()
-            data_en = response_en.json()
+            response = requests.get(url, headers=HEADERS, params=params)
+            response.raise_for_status()
+            data = response.json()
 
-            # Fetch Urdu word-by-word
-            response_ur = requests.get(url, headers=headers, params=params_ur)
-            response_ur.raise_for_status()
-            data_ur = response_ur.json()
-
-            # Create a map of Urdu words by verse_key
-            urdu_words_map = {}
-            for verse in data_ur.get('verses', []):
-                verse_key = verse.get('verse_key', '')
-                urdu_words_map[verse_key] = []
-                for word in verse.get('words', []):
-                    if word.get('char_type_name') == 'word':
-                        urdu_words_map[verse_key].append(
-                            word.get('translation', {}).get('text', '')
-                        )
-
-            for verse in data_en.get('verses', []):
+            for verse in data.get('verses', []):
                 verse_key = verse.get('verse_key', '')
                 v_chapter, v_num = verse_key.split(':')
                 v_num = int(v_num)
 
-                # Only include verses in our range
                 if start_verse <= v_num <= end_verse:
-                    # Get Arabic text
-                    arabic_text = verse.get('text_uthmani', '')
-
-                    # Get translations for each language
-                    translations_dict = {}
-                    for trans in verse.get('translations', []):
-                        resource_id = str(trans.get('resource_id', ''))
-                        # Map resource_id back to language
-                        for lang, tid in TRANSLATION_IDS.items():
-                            if tid == resource_id:
-                                translations_dict[lang] = trans.get('text', '')
-                                break
-
-                    # Get word-by-word data with both English and Urdu
                     words = []
-                    urdu_words = urdu_words_map.get(verse_key, [])
-                    word_index = 0
                     for word in verse.get('words', []):
                         if word.get('char_type_name') == 'word':
-                            urdu_trans = urdu_words[word_index] if word_index < len(urdu_words) else ''
                             words.append({
                                 'arabic': word.get('text_uthmani', ''),
-                                'english': word.get('translation', {}).get('text', ''),
-                                'urdu': urdu_trans
+                                'translation': word.get('translation', {}).get('text', '')
                             })
-                            word_index += 1
-
-                    all_verses.append({
-                        'verse_key': verse_key,
-                        'verse_number': v_num,
-                        'arabic_text': arabic_text,
-                        'translations': translations_dict,
-                        'words': words
-                    })
+                    words_map[verse_key] = words
 
         except requests.RequestException as e:
-            print(f"Error fetching chapter {chapter}: {e}")
+            print(f"Error fetching word-by-word for chapter {chapter}: {e}")
+
+    return words_map
+
+
+def fetch_verses(verse_start, verse_count, languages=['en', 'ur'], word_languages=['en', 'ur']):
+    """
+    Fetch Quran verses with translations and word-by-word in multiple languages.
+
+    Args:
+        verse_start: Starting verse (e.g., "2:29")
+        verse_count: Number of verses to fetch
+        languages: List of translation languages (e.g., ['en', 'ur'])
+        word_languages: List of word-by-word languages (e.g., ['en', 'ur'])
+
+    Returns:
+        List of verse dictionaries
+    """
+    verse_end = calculate_end_verse(verse_start, verse_count)
+
+    # Fetch translations using advanced_copy
+    translations_map = fetch_translations_advanced(verse_start, verse_end, languages)
+
+    # Fetch word-by-word for each language
+    word_maps = {}
+    for word_lang in word_languages:
+        word_maps[word_lang] = fetch_word_by_word(verse_start, verse_count, word_lang)
+
+    # Build the verses list
+    all_verses = []
+    ranges = calculate_verse_ranges(verse_start, verse_count)
+
+    for chapter, start_v, end_v in ranges:
+        for v_num in range(start_v, end_v + 1):
+            verse_key = f"{chapter}:{v_num}"
+
+            # Combine word-by-word from different languages
+            words = []
+            # Use English words as base (for Arabic text)
+            en_words = word_maps.get('en', {}).get(verse_key, [])
+            ur_words = word_maps.get('ur', {}).get(verse_key, [])
+
+            for i, en_word in enumerate(en_words):
+                word_data = {
+                    'arabic': en_word.get('arabic', ''),
+                    'en': en_word.get('translation', ''),
+                }
+                # Add Urdu translation if available
+                if i < len(ur_words):
+                    word_data['ur'] = ur_words[i].get('translation', '')
+                else:
+                    word_data['ur'] = ''
+                words.append(word_data)
+
+            # Get Arabic text from words
+            arabic_text = ' '.join([w['arabic'] for w in words])
+
+            all_verses.append({
+                'verse_key': verse_key,
+                'verse_number': v_num,
+                'arabic_text': arabic_text,
+                'translations': translations_map.get(verse_key, {}),
+                'words': words
+            })
 
     return all_verses
 
@@ -199,55 +273,60 @@ def format_verses(verses, show_words=True):
     # Urdu section first
     output.append("Urdu Translation:")
     for verse in verses:
-        verse_num = verse['verse_key'].split(':')[1]
+        verse_key = verse['verse_key']
         translations = verse['translations']
         if 'ur' in translations:
-            output.append(f"\t{verse_num}.\t{translations['ur']}")
+            output.append(f"\t{verse_key}.\t{translations['ur']}")
 
     output.append("")  # Blank line between sections
 
     # English section
     output.append("English Translation:")
     for verse in verses:
-        verse_num = verse['verse_key'].split(':')[1]
+        verse_key = verse['verse_key']
         translations = verse['translations']
         if 'en' in translations:
-            output.append(f"\t{verse_num}.\t{translations['en']}")
+            output.append(f"\t{verse_key}.\t{translations['en']}")
 
     if show_words:
         output.append("")
         output.append("Word-by-Word:")
         for verse in verses:
-            verse_num = verse['verse_key'].split(':')[1]
+            verse_key = verse['verse_key']
             if verse['words']:
-                output.append(f"\t{verse_num}.")
+                output.append(f"\t{verse_key}.")
                 for w in verse['words']:
-                    output.append(f"\t\t{w['english']} = {w['urdu']} = {w['arabic']}")
+                    en_trans = w.get('en', '')
+                    ur_trans = w.get('ur', '')
+                    arabic = w.get('arabic', '')
+                    output.append(f"\t\t{en_trans} = {ur_trans} = {arabic}")
                 output.append("")  # Blank line between verses
 
     return "\n".join(output)
 
 
 def main():
-    # Example usage
-    verse_start = input("Enter starting verse (e.g., 2:29): ").strip()
-    verse_count = int(input("Enter number of verses to fetch: ").strip())
+    while True:
+        verse_start = input("Enter starting verse (e.g., 2:29): ").strip()
+        verse_count = int(input("Enter number of verses to fetch: ").strip())
 
-    print(f"\nFetching {verse_count} verses starting from {verse_start}")
-    print("Translations: English & Urdu")
-    print("-" * 50)
+        print(f"\nFetching {verse_count} verses starting from {verse_start}")
+        print("Translations: English & Urdu")
+        print("Word-by-Word: English & Urdu")
+        print("-" * 50)
 
-    verses = fetch_verses(
-        verse_start=verse_start,
-        verse_count=verse_count,
-        languages=['en', 'ur']
-    )
+        verses = fetch_verses(
+            verse_start=verse_start,
+            verse_count=verse_count,
+            languages=['en', 'ur'],
+            word_languages=['en', 'ur']
+        )
 
-    formatted = format_verses(verses, show_words=True)
-    print(formatted)
-    copy(formatted)
-    print("-" * 50)
-    print("Copied to clipboard!")
+        formatted = format_verses(verses, show_words=True)
+        print(formatted)
+        copy(formatted)
+        print("-" * 50)
+        print("Copied to clipboard!")
 
 
 if __name__ == "__main__":

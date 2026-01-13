@@ -266,48 +266,62 @@ def fetch_verses(verse_start, verse_count, languages=['en', 'ur'], word_language
 def format_verses(verses, show_words=True):
     """Format verses for display with translations grouped by language."""
     output = []
+    output.append("بِسْمِ ٱللَّهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ ")
+    output.append("Day – XX")
+    output.append("Month XX, 20XX")
 
     # Arabic section first
     output.append("Arabic Text:")
     for verse in verses:
-        verse_key = verse['verse_key']
+        verse_number = verse['verse_number']
         arabic_text = verse['arabic_text']
         if arabic_text:
-            output.append(f"\t{verse_key}.\t{arabic_text}")
+            output.append(f"\t({verse_number})\t{arabic_text}")
 
-    output.append("")  # Blank line between sections
+    output.append("")
 
     # Urdu section
-    output.append("Urdu Translation:")
+    output.append("اردو ترجمہ ")
     for verse in verses:
-        verse_key = verse['verse_key']
+        verse_number = verse['verse_number']
         translations = verse['translations']
         if 'ur' in translations:
-            output.append(f"\t{verse_key}.\t{translations['ur']}")
+            output.append(f"\t({verse_number})\t{translations['ur']}")
 
-    output.append("")  # Blank line between sections
+    output.append("")
 
     # English section
     output.append("English Translation:")
     for verse in verses:
-        verse_key = verse['verse_key']
+        verse_number = verse['verse_number']
         translations = verse['translations']
         if 'en' in translations:
-            output.append(f"\t{verse_key}.\t{translations['en']}")
+            output.append(f"\t({verse_number})\t{translations['en']}")
 
     if show_words:
         output.append("")
-        output.append("Word-by-Word:")
+        output.append("لفظ بہ لفظ ترجمہ (اردو | English) ")
+
+        # Unicode BiDi control characters
+        LRE = '\u202A'  # Left-to-Right Embedding
+        RLE = '\u202B'  # Right-to-Left Embedding
+        PDF = '\u202C'  # Pop Directional Formatting
+        LRM = '\u200E'  # Left-to-Right Mark
+
         for verse in verses:
-            verse_key = verse['verse_key']
+            verse_number = verse['verse_number']
             if verse['words']:
-                output.append(f"\t{verse_key}.")
+                output.append(f"({verse_number})")
                 for w in verse['words']:
                     en_trans = w.get('en', '')
                     ur_trans = w.get('ur', '')
                     arabic = w.get('arabic', '')
-                    output.append(f"\t\t{en_trans} = {ur_trans} = {arabic}")
-                output.append("")  # Blank line between verses
+
+                    # Format: English | Urdu — Arabic
+                    # Wrap the entire line in LTR context
+                    line = f"{LRM}{en_trans} | {RLE}{ur_trans} — {arabic}{PDF}{LRM}"
+                    output.append(f"{line}")
+                output.append("")
 
     return "\n".join(output)
 

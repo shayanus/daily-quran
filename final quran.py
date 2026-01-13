@@ -101,45 +101,56 @@ def fetch_translations_advanced(verse_start, verse_end, languages=['en', 'ur']):
     Returns a dict mapping verse_key -> {lang: translation_text}
     """
     url = "https://quran.com/api/proxy/content/api/qdc/verses/advanced_copy"
-    translations_map = {}
 
-    for lang in languages:
-        trans_id = TRANSLATION_IDS.get(lang, '131')
-        params = {
-            "raw": "true",
-            "from": verse_start,
-            "to": verse_end,
-            "footnote": "false",
-            "translator_name": "false",
-            "translations": trans_id
-        }
+    # Get all translation IDs
+    trans_ids = ','.join([TRANSLATION_IDS.get(lang, '131') for lang in languages])
 
-        try:
-            response = requests.get(url, params=params, headers=HEADERS)
-            response.raise_for_status()
-            data = response.json()
+    params = {
+        "raw": "true",
+        "from": verse_start,
+        "to": verse_end,
+        "footnote": "false",
+        "translator_name": "false",
+        "translations": trans_ids
+    }
 
-            # Parse the result - it comes as a single text with verses
-            result_text = data.get('result', '')
+    try:
+        response = requests.get(url, params=params, headers=HEADERS)
+        response.raise_for_status()
+        data = response.json()
 
-            # Split by verse markers - format is typically "(chapter:verse) text"
-            # or just numbered verses
-            lines = [line.strip() for line in result_text.splitlines() if line.strip()]
+        result_text = data.get('result', '')
 
-            for i in range(0, len(lines), 2):
-                verse = lines[i]
-                text = lines[i + 1]
+        # Split by double newlines to get sections
+        sections = [s.strip() for s in result_text.split('\n\n') if s.strip()]
 
-                translations_map.setdefault(verse, {})[lang] = text
+        translations_map = {}
 
-                if verse not in translations_map:
-                    translations_map[verse] = {}
-                translations_map[verse][lang] = text
+        # Process sections in groups of (verse_key, translation1, translation2, ...)
+        i = 0
+        while i < len(sections):
+            section = sections[i].strip()
 
-        except requests.RequestException as e:
-            print(f"Error fetching {lang} translations: {e}")
+            # Check if this is a verse key (format: "number:number")
+            if ':' in section and all(c.isdigit() or c == ':' for c in section):
+                verse_key = section
+                translations_map[verse_key] = {}
 
-    return translations_map
+                i += 1
+
+                # Get translations in order
+                for lang in languages:
+                    if i < len(sections):
+                        translations_map[verse_key][lang] = sections[i].strip()
+                        i += 1
+            else:
+                i += 1
+
+        return translations_map
+
+    except requests.RequestException as e:
+        print(f"Error fetching translations: {e}")
+        return {}
 
 
 def fetch_word_by_word(verse_start, verse_count, word_lang='en'):
@@ -256,7 +267,17 @@ def format_verses(verses, show_words=True):
     """Format verses for display with translations grouped by language."""
     output = []
 
-    # Urdu section first
+    # Arabic section first
+    output.append("Arabic Text:")
+    for verse in verses:
+        verse_key = verse['verse_key']
+        arabic_text = verse['arabic_text']
+        if arabic_text:
+            output.append(f"\t{verse_key}.\t{arabic_text}")
+
+    output.append("")  # Blank line between sections
+
+    # Urdu section
     output.append("Urdu Translation:")
     for verse in verses:
         verse_key = verse['verse_key']

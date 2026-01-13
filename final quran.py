@@ -124,31 +124,17 @@ def fetch_translations_advanced(verse_start, verse_end, languages=['en', 'ur']):
 
             # Split by verse markers - format is typically "(chapter:verse) text"
             # or just numbered verses
-            lines = result_text.strip().split('\n')
+            lines = [line.strip() for line in result_text.splitlines() if line.strip()]
 
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
+            for i in range(0, len(lines), 2):
+                verse = lines[i]
+                text = lines[i + 1]
 
-                # Try to parse verse reference - look for patterns like (2:29) or 2:29
-                import re
-                match = re.match(r'\((\d+:\d+)\)\s*(.*)', line)
-                if match:
-                    verse_key = match.group(1)
-                    text = match.group(2).strip()
-                else:
-                    # Try without parentheses
-                    match = re.match(r'(\d+:\d+)\s*(.*)', line)
-                    if match:
-                        verse_key = match.group(1)
-                        text = match.group(2).strip()
-                    else:
-                        continue
+                translations_map.setdefault(verse, {})[lang] = text
 
-                if verse_key not in translations_map:
-                    translations_map[verse_key] = {}
-                translations_map[verse_key][lang] = text
+                if verse not in translations_map:
+                    translations_map[verse] = {}
+                translations_map[verse][lang] = text
 
         except requests.RequestException as e:
             print(f"Error fetching {lang} translations: {e}")
